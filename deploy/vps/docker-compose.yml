@@ -1,0 +1,103 @@
+# OpenReply on a single VPS: Postgres, Redis, web, worker, cron, Caddy (HTTPS).
+# Run from this folder:  docker compose up -d --build
+# Only Caddy publishes ports (80/443). Postgres and Redis stay on the private network.
+
+name: openreply
+
+x-app-env: &app-env
+  NODE_ENV: production
+  NEXTAUTH_URL: https://${DOMAIN}
+  NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+  CRON_SECRET: ${CRON_SECRET}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+  DATABASE_URL: postgresql://openreply:${POSTGRES_PASSWORD}@postgres:5432/openreply
+  REDIS_URL: redis://redis:6379
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  EMAIL_FROM: ${EMAIL_FROM:-}
+  EMAIL_SERVER: ${EMAIL_SERVER:-}
+  ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openreply
+      POSTGRES_USER: openreply
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openreply -d openreply"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ../..
+    image: openreply-app:latest
+    restart: unless-stopped
+    environment: *app-env
+    # Migrations run at start, when the database is reachable (never at build).
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run start"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  worker:
+    image: openreply-app:latest
+    restart: unless-stopped
+    environment: *app-env
+    command: ["npm", "run", "worker"]
+    depends_on:
+      web: { condition: service_healthy }
+
+  cron:
+    image: openreply-app:latest
+    restart: unless-stopped
+    command: ["sh", "scripts/cron.sh"]
+    environment:
+      CRON_BASE_URL: http://web:3000
+      CRON_SECRET: ${CRON_SECRET}
+    depends_on:
+      web: { condition: service_healthy }
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:
