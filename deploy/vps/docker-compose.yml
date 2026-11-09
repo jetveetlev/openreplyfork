@@ -19,8 +19,15 @@ x-app-env: &app-env
   EMAIL_SERVER: ${EMAIL_SERVER:-}
   ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
 
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
+    logging: *logging
     image: postgres:16
     restart: unless-stopped
     environment:
@@ -36,6 +43,7 @@ services:
       retries: 10
 
   redis:
+    logging: *logging
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
@@ -48,6 +56,7 @@ services:
       retries: 10
 
   web:
+    logging: *logging
     build:
       context: ../..
     image: openreply-app:latest
@@ -68,6 +77,7 @@ services:
       start_period: 60s
 
   worker:
+    logging: *logging
     image: openreply-app:latest
     pull_policy: never   # built locally by the web service
     restart: unless-stopped
@@ -77,6 +87,7 @@ services:
       web: { condition: service_healthy }
 
   cron:
+    logging: *logging
     image: openreply-app:latest
     pull_policy: never   # built locally by the web service
     restart: unless-stopped
@@ -88,6 +99,7 @@ services:
       web: { condition: service_healthy }
 
   caddy:
+    logging: *logging
     profiles: ["caddy"]
     image: caddy:2
     restart: unless-stopped
